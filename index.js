@@ -25,7 +25,7 @@ app.post('/start', (req,res)=>{
 
     console.log("Bot is running...");
     
-    startBot(req.body.email, req.body.password, req.body.search, req.body.message, req.body.bg, req.body.wait)
+    startBot(req.body.email, req.body.password, req.body.search, req.body.message, req.body.bg, req.body.waitMin, req.body.waitMax)
     res.send("Bot is running. Please check the server for progress.");    
 });
 
@@ -34,7 +34,7 @@ app.listen(port, (req,res)=>{
 });
 
 
-const startBot = async (email, password, search, message, bg, wait) => {
+const startBot = async (email, password, search, message, bg, waitMin, waitMax) => {
     let isHeadless = false;
     if(bg == 'on'){
         isHeadless = true
@@ -42,20 +42,20 @@ const startBot = async (email, password, search, message, bg, wait) => {
 
     const browser = await puppeteer.launch({
         headless: isHeadless,
+        args: [
+            '--no-default-browser-check'
+        ]
     });   
 
     const linkedInPage = await browser.newPage();
-    // await linkedInPage.setViewport({ width: 1366, height: 768});
-    await linkedInPage.setViewport({ width: 800, height: 600 })
+    await linkedInPage.setViewport({ width: 1032, height: 600 })
     
     await linkedInPage.goto("https://www.linkedin.com/uas/login", {timeout: 30000}); 
     console.log("Logging in LinkedIn...");
 
-    // await linkedInPage.waitForSelector('#login-submit');
     await linkedInPage.evaluate((email, password) => {
         document.querySelector("#session_key-login").value = email;
         document.querySelector("#session_password-login").value = password;
-        // document.querySelector("#login-submit").click();
     }, email, password);
 
     await linkedInPage.click("#btn-primary");
@@ -69,19 +69,9 @@ const startBot = async (email, password, search, message, bg, wait) => {
     await linkedInPage.type("#nav-typeahead-wormhole input", search);
     await linkedInPage.type("#nav-typeahead-wormhole input", String.fromCharCode(13));
 
-    console.log("Searching for '" + search + "'...");
+    console.log("Searching for: '" + search + "'");
 
     await linkedInPage.waitForNavigation();
-    // const btnPeople = await linkedInPage.$x("//button[contains(text(), 'People')]");
-
-    // const buttons = await linkedInPage.$$("button");
-    
-    // for (let i = 0; i < buttons.length; i++) {
-    //     // console.log(await (await buttons[i].getProperty('innerText')).jsonValue());
-    //     if (await (await buttons[i].getProperty('innerText')).jsonValue() == "People"){
-    //         await buttons[i].click();
-    //     }
-    // }
 
     let url = linkedInPage.url();
     url = url.replace('/results/index/?', '/results/people/?');
@@ -97,27 +87,51 @@ const startBot = async (email, password, search, message, bg, wait) => {
             await linkedInPage.waitFor(1000);
             i++;
         }
-        
-        const resultButtons = await linkedInPage.$x('//button[contains(@class,"search-result")]');
+        let resultList = await linkedInPage.$x('//ul[contains(@class,"results-list")]/li');
+        for (let i = 0; i < resultList.length; i++) {
+            let resultButton = await resultList[i].$$('button[class*="search-result"]')
 
-        for (let i = 0; i < resultButtons.length; i++) {
-            // console.log(await (await resultButtons[i].getProperty('innerText')).jsonValue());
-            if (await (await resultButtons[i].getProperty('innerText')).jsonValue() == "Connect"){
+            let resultButtonText;
+            for(let k = 0;  k < resultButton.length; k++){
+                resultButtonText = await ( await resultButton[k].getProperty('innerText')).jsonValue();
+                if (  resultButtonText == "Connect"){
+                    resultButtonText = 'xxx'
+                    resultButton[k].click();
+                }
+            }
+
+            if(resultButtonText != 'xxx'){
+                continue;
+            }
+
+            
+            let sname = await ( await( await resultList[i].$('span.actor-name')).getProperty('innerText')).jsonValue();
+
+            console.log("Wait before performing next action");
+            await sleep(linkedInPage, waitMin, waitMax); 
+    
+            let addButtons = await linkedInPage.$x('//div[@role="document"]//button');
+            
+            let addNoteButton;
+            let sendNowButton;
+            for(let k = 0;  k < addButtons.length; k++){
+                let addButtonsText = await ( await addButtons[k].getProperty('innerText')).jsonValue();
+                if (  addButtonsText == "Add a note"){
+                    addNoteButton = addButtons[k];
+                }else if( addButtonsText == "Send now" || addButtonsText == "Done"){
+                    sendNowButton = addButtons[k];                            
+                }
+            }
+
+            if( message != "" ){
+                let arrName = sname.split(' ');
+
+                await addNoteButton.click();
                 
-                await resultButtons[i].click();
+                console.log("Wait before writing message");
+                await sleep(linkedInPage, waitMin, waitMax); 
 
-                await linkedInPage.waitForXPath('//div[contains(@class,"send-invite")]', {timeout: 30000});
-                await linkedInPage.waitForXPath('//div[@role="document"]//button', {timeout: 30000});
-
-                const name = await linkedInPage.$x('//div[@role="document"]//strong');
-                let sname = await (await name[0].getProperty('innerText')).jsonValue();
-        
-                const arrName = sname.split(' ');
-                let addNoteButtons = await linkedInPage.$x('//div[@role="document"]//button');
-                addNoteButtons[0].click();
-
-                const tempMessage = message.replace('$name', arrName[0]);
-
+                let tempMessage = message.replace('$name', arrName[0]);
                 await linkedInPage.waitForSelector('#custom-message');
                 await linkedInPage.evaluate((tempMessage) => {
                     document.querySelector("#custom-message").value = tempMessage;
@@ -125,23 +139,49 @@ const startBot = async (email, password, search, message, bg, wait) => {
 
                 await linkedInPage.type('#custom-message', ' ');
 
-                const doneButtons = await linkedInPage.$x('//div[@role="document"]//button');
-                doneButtons[1].click();
+                let messageButtons = await linkedInPage.$x('//div[@role="document"]//button');
+                
+                for(let k = 0;  k < messageButtons.length; k++){
+                    let messageButtonsText = await ( await messageButtons[k].getProperty('innerText')).jsonValue();
+                    if (  messageButtonsText == "Send invitation"){
 
-                console.log(sname + " was added.");
+                        console.log("Wait before clicking Send invitation");                                
+                        await sleep(linkedInPage, waitMin, waitMax);                                
+                        await messageButtons[k].click();
 
-                await linkedInPage.waitFor(parseInt(wait)*1000);  
+                    }
+                }                        
+            }else{
+                await sendNowButton.click();                    
+                
             }
+
+            console.log(sname + " was added.");    
+            console.log("Wait before connecting to the next person");                                    
+            await sleep(linkedInPage, waitMin, waitMax);
         }
         
-        const next = await linkedInPage.$x('//button[@class="next"]')
+        let next = await linkedInPage.$x('//button[@class="next"]')
         if (next.length > 0){
             flag = true;
-            next[0].click();
+            next[0].click();  
+
+            console.log("Wait before connecting to the next person");                                    
+            await sleep(linkedInPage, waitMin, waitMax);
+
         }else{
             flag = false;
         }
-        await linkedInPage.waitFor(parseInt(wait)*1000);        
-
     }
+
+    console.log("Process completed")
 };
+
+sleep = async (page, min, max) => {    
+    let wait = Math.floor(Math.random() * parseInt(max)) + parseInt(min); 
+
+    for (let i=0; i < wait; i++){
+        console.log("Seconds to wait: " + (wait - i) );        
+        await page.waitFor(1000);
+    }
+}
